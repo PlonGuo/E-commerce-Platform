@@ -36,7 +36,6 @@ function App() {
             path="/profile"
             element={<PrivateRoute />}
           >
-            {/* Outlet */}
             <Route
               path="/profile"
               element={<Profile />}

@@ -1,7 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import {
+  getStorage,
+  ref,
+  uploadBytesResumable,
+  getDownloadURL,
+} from 'firebase/storage';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase.config';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
+import { v4 as uuidv4 } from 'uuid';
 import Spinner from '../components/Spinner';
 
 function CreateListing() {
@@ -90,11 +99,11 @@ function CreateListing() {
 
     if (geolocationEnabled) {
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&key=${process.env.REACT_APP_GEOCODE_API_KEY}`
+        `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&key=${process.env.REACT_APP_GEOCODE_KEY}`
       );
 
       const data = await response.json();
-      // console.log(data);
+      console.log(data);
       geolocation.lat = data.results[0]?.geometry.location.lat ?? 0;
       geolocation.lng = data.results[0]?.geometry.location.lng ?? 0;
 
@@ -105,6 +114,8 @@ function CreateListing() {
 
       if (location === undefined || location.includes('undefined')) {
         setLoading(false);
+        console.log(location);
+        // console.log(`API Key: ${process.env.REACT_APP_GEOCODE_KEY}`);
         toast.error('Please enter a valid address');
         return;
       }
@@ -114,7 +125,69 @@ function CreateListing() {
       location = address;
     }
 
+    // Store images in firebase
+    const storeImage = async (image) => {
+      return new Promise((resolve, reject) => {
+        const storage = getStorage();
+        const fileName = `${auth.currentUser.uid}-${image.name}-${uuidv4()}`;
+
+        const storageRef = ref(storage, 'images/' + fileName);
+
+        const uploadTask = uploadBytesResumable(storageRef, image);
+
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            const progress =
+              (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            console.log('Upload is ' + progress + '% done');
+            switch (snapshot.state) {
+              case 'paused':
+                console.log('Upload is paused');
+                break;
+              case 'running':
+                console.log('Upload is running');
+                break;
+            }
+          },
+          (error) => {
+            // Handle unsuccessful uploads
+            reject(error);
+          },
+          () => {
+            getDownloadURL(uploadTask.snapshot.ref).then((downloadURL) => {
+              resolve(downloadURL);
+            });
+          }
+        );
+      });
+    };
+
+    const imgUrls = await Promise.all(
+      [...images].map((image) => storeImage(image))
+    ).catch(() => {
+      setLoading(false);
+      toast.error('Failed to upload images');
+      return;
+    });
+
+    const formDataCopy = {
+      ...formData,
+      imgUrls,
+      geolocation,
+      timestamp: serverTimestamp(),
+    };
+
+    delete formDataCopy.images;
+    delete formDataCopy.address;
+    location && (formDataCopy.location = location);
+    !formDataCopy.offer && delete formDataCopy.discountedPrice;
+
+    const docRef = await addDoc(collection(db, 'listings'), formDataCopy);
+
     setLoading(false);
+    toast.success('Listing saved');
+    navigate(`/category/${formDataCopy.type}/${docRef.id}`);
   };
 
   const onMutate = (e) => {
